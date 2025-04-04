@@ -1,85 +1,125 @@
 #include "mapwidget.h"
+#include <QDir>
+#include <QFile>
+#include <QDebug>
+#include <QPaintEvent>
 #include <QPainter>
-#include <cmath>
+#include <QTimer>
 #include <QNetworkRequest>
 #include <QNetworkReply>
-#include <QDebug>
 
 MapWidget::MapWidget(QWidget *parent)
-    : QWidget(parent), zoomLevel(10), centerLongitude(6.839349), centerLatitude(47.64263), networkManager(new QNetworkAccessManager(this)) {}
+    : QWidget(parent), networkManager(new QNetworkAccessManager(this)) {
+    setMinimumSize(520, 520);
+}
 
-void MapWidget::setZoomLevel(int zoomLevel) {
-    this->zoomLevel = zoomLevel;
+void MapWidget::setCenter(double lon, double lat) {
+    this->lon = lon;
+    this->lat = lat;
+    updateVisibleTiles();
     update();
 }
 
-void MapWidget::setCenterCoordinates(double longitude, double latitude) {
-    this->centerLongitude = longitude;
-    this->centerLatitude = latitude;
+void MapWidget::setZoom(int zoom) {
+    this->zoom = zoom;
+    updateVisibleTiles();
     update();
 }
 
 void MapWidget::paintEvent(QPaintEvent *event) {
     QPainter painter(this);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
 
-    int tileSize = 256;
-    int numTilesX = width() / tileSize + 2;
-    int numTilesY = height() / tileSize + 2;
+    QPointF centerTilePos = latLonToTilePos(lon, lat, zoom);
+    int tileX = static_cast<int>(centerTilePos.x());
+    int tileY = static_cast<int>(centerTilePos.y());
 
-    // Calculate the tile coordinates for the center of the map
-    int centerTileX = static_cast<int>((centerLongitude + 180.0) / 360.0 * (1 << zoomLevel));
-    int centerTileY = static_cast<int>((1.0 - log(tan(centerLatitude * M_PI / 180.0) + 1.0 / cos(centerLatitude * M_PI / 180.0)) / M_PI) / 2.0 * (1 << zoomLevel));
+    bool isLoading = false;
 
-    for (int x = -numTilesX / 2; x < numTilesX / 2; ++x) {
-        for (int y = -numTilesY / 2; y < numTilesY / 2; ++y) {
-            int tileX = centerTileX + x;
-            int tileY = centerTileY + y;
-            QPixmap tile = loadTile(tileX, tileY, zoomLevel);
-            if (!tile.isNull()) {
-                int screenX = (x + numTilesX / 2) * tileSize;
-                int screenY = (y + numTilesY / 2) * tileSize;
-                painter.drawPixmap(screenX, screenY, tile);
-            } else {
-                qDebug() << "Failed to load tile at" << tileX << tileY << zoomLevel;
+    for (int x = tileX - 1; x <= tileX + 1; ++x) {
+        for (int y = tileY - 1; y <= tileY + 1; ++y) {
+            QString tileKey = QString("%1-%2-%3").arg(zoom).arg(x).arg(y);
+            if (!tileCache.contains(tileKey)) {
+                isLoading = true;
+                loadTile(x, y, zoom);
+            }
+            if (tileCache.contains(tileKey)) {
+                QPixmap tile = tileCache[tileKey];
+                QPointF tilePos = QPointF((x - tileX) * 256, (y - tileY) * 256);
+                painter.drawPixmap(tilePos, tile);
             }
         }
     }
-}
 
-QPixmap MapWidget::loadTile(int x, int y, int zoom) {
-    QString url = QString("https://maptiles.p.rapidapi.com/fr/map/v1/%1/%2/%3.png").arg(zoom).arg(x).arg(y);
-    qDebug() << "Loading tile from URL:" << url;
-
-    QNetworkRequest request(url);
-    QByteArray apiKey = "a7e023fad0msh46f2825da56deb7p1945d1jsn5496bbf3a80d"; // Remplace par ta clé API
-    request.setRawHeader("x-rapidapi-key", apiKey);
-    request.setRawHeader("x-rapidapi-host", "maptiles.p.rapidapi.com");
-
-    QNetworkReply *reply = networkManager->get(request);
-
-    // Connect the reply's finished signal to the slot
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        onTileDownloaded(reply);
-    });
-
-    // Return a blank pixmap while waiting for the download
-    return QPixmap();
-}
-
-void MapWidget::onTileDownloaded(QNetworkReply *reply) {
-    if (reply->error() == QNetworkReply::NoError) {
-        QByteArray data = reply->readAll();
-        QPixmap pixmap;
-        if (pixmap.loadFromData(data)) {
-            qDebug() << "Tile downloaded successfully";
-            // Cache the pixmap or directly use it in paintEvent
-            // For simplicity, we'll just trigger an update to repaint
-            update();
-        } else {
-            qDebug() << "Failed to load pixmap from data";
-        }
-    } else {
-        qDebug() << "Network error:" << reply->errorString();
+    if (isLoading) {
+        painter.setPen(Qt::black);
+        painter.setFont(QFont("Arial", 40));
+        painter.drawText(event->rect(), Qt::AlignCenter, "EN ATTENTE");
     }
-    reply->deleteLater();
+}
+
+QPointF MapWidget::latLonToTilePos(double lon, double lat, int z) {
+    double x = (lon + 180.0) / 360.0 * (1 << z);
+    double y = (1.0 - log(tan(lat * M_PI / 180.0) + 1.0 / cos(lat * M_PI / 180.0)) / M_PI) / 2.0 * (1 << z);
+    return QPointF(x, y);
+}
+
+QPointF MapWidget::screenPosToLatLon(const QPoint &pos) {
+    QPointF centerTilePos = latLonToTilePos(lon, lat, zoom);
+    int tileX = static_cast<int>(centerTilePos.x());
+    int tileY = static_cast<int>(centerTilePos.y());
+
+    double x = (pos.x() / 256.0) + tileX - 1;
+    double y = (pos.y() / 256.0) + tileY - 1;
+
+    double lon = x / (1 << zoom) * 360.0 - 180.0;
+    double lat = atan(sinh(M_PI * (1 - 2 * y / (1 << zoom)))) * 180.0 / M_PI;
+
+    return QPointF(lon, lat);
+}
+
+void MapWidget::loadTile(int x, int y, int z) {
+    QString tileKey = QString("%1-%2-%3").arg(z).arg(x).arg(y);
+    QString tilePath = QString("tiles/%1/%2/%3.png").arg(z).arg(x).arg(y);
+
+    if (QFile::exists(tilePath)) {
+        tileCache[tileKey] = QPixmap(tilePath);
+    } else {
+        QUrl url(QString("https://tile.openstreetmap.org/%1/%2/%3.png").arg(z).arg(x).arg(y));
+        QNetworkRequest request(url);
+        request.setRawHeader("User-Agent", "laCarteuuu/1.0");
+
+        QNetworkReply *reply = networkManager->get(request);
+        connect(reply, &QNetworkReply::finished, this, [this, reply, tileKey, tilePath, x, y, z]() {
+            if (reply->error() == QNetworkReply::NoError) {
+                QByteArray data = reply->readAll();
+                QPixmap pixmap;
+                pixmap.loadFromData(data);
+                if (!pixmap.isNull()) {
+                    tileCache[tileKey] = pixmap;
+                    QDir().mkpath(QFileInfo(tilePath).absolutePath());
+                    pixmap.save(tilePath);
+                    update();
+                }
+            } else {
+                QTimer::singleShot(1000, this, [this, x, y, z](){
+                    loadTile(x, y, z);
+                });
+            }
+            reply->deleteLater();
+        });
+    }
+}
+
+void MapWidget::updateVisibleTiles() {
+    tileCache.clear();
+    QPointF centerTilePos = latLonToTilePos(lon, lat, zoom);
+    int tileX = static_cast<int>(centerTilePos.x());
+    int tileY = static_cast<int>(centerTilePos.y());
+
+    for (int x = tileX - 1; x <= tileX + 1; ++x) {
+        for (int y = tileY - 1; y <= tileY + 1; ++y) {
+            loadTile(x, y, zoom);
+        }
+    }
 }

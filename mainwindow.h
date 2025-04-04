@@ -5,6 +5,8 @@
 #include <QScopedPointer>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QListWidgetItem>
+#include "mapwidget.h"
 
 class QMenu;
 class QGroupBox;
@@ -26,6 +28,7 @@ class MainWindow : public QMainWindow
     QScopedPointer<QListWidget> _suggestions_list;
     QScopedPointer<QLabel> _map_label;
     QNetworkAccessManager *_network_manager;
+    MapWidget *_mapWidget;
 
 public:
     MainWindow(QWidget *parent = nullptr);
@@ -36,6 +39,7 @@ private slots:
     void onQuitActionTriggered();
     void onAboutActionTriggered();
     void onSearchReplyReceived();
+    void onSuggestionItemClicked(QListWidgetItem *item);
 
 private:
     void performSearch(const QString &query);

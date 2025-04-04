@@ -1,4 +1,5 @@
-#include <QWidget>
+#include "mainwindow.h"
+#include "mapwidget.h"
 #include <QLineEdit>
 #include <QPushButton>
 #include <QListWidget>
@@ -16,8 +17,8 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
-#include "mainwindow.h"
-#include "mapwidget.h"
+#include <QListWidgetItem>
+#include <QDebug>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), _network_manager(new QNetworkAccessManager(this)) {
@@ -61,11 +62,11 @@ MainWindow::MainWindow(QWidget *parent)
     _main_widget->setLayout(mainLayout);
 
     // Map widget on the right side
-    MapWidget *mapWidget = new MapWidget(_main_widget.get());
-    mapWidget->setZoomLevel(10);
-    mapWidget->setCenterCoordinates(6.839349, 47.64263);
+    _mapWidget = new MapWidget(_main_widget.get());
+    _mapWidget->setZoom(10);
+    _mapWidget->setCenter(6.839349, 47.64263);
 
-    mainLayout->addWidget(mapWidget);
+    mainLayout->addWidget(_mapWidget);
 
     // Connect the search button to the slot
     connect(_search_button.get(), &QPushButton::clicked, this, &MainWindow::onSearchButtonClicked);
@@ -73,6 +74,9 @@ MainWindow::MainWindow(QWidget *parent)
     // Connect menu actions to slots
     connect(quitAction, &QAction::triggered, this, &MainWindow::onQuitActionTriggered);
     connect(aboutAction, &QAction::triggered, this, &MainWindow::onAboutActionTriggered);
+
+    // Connect the itemClicked signal to the slot
+    connect(_suggestions_list.get(), &QListWidget::itemClicked, this, &MainWindow::onSuggestionItemClicked);
 }
 
 MainWindow::~MainWindow() {}
@@ -98,6 +102,9 @@ void MainWindow::onSearchReplyReceived() {
     if (reply) {
         if (reply->error() == QNetworkReply::NoError) {
             QByteArray response = reply->readAll();
+
+            qDebug() << "JSON Response:" << response;
+
             QJsonDocument jsonDoc = QJsonDocument::fromJson(response);
             QJsonArray jsonArray = jsonDoc.array();
 
@@ -105,10 +112,18 @@ void MainWindow::onSearchReplyReceived() {
             for (const QJsonValue &value : jsonArray) {
                 QJsonObject obj = value.toObject();
                 QString displayName = obj["display_name"].toString();
-                double lon = obj["lon"].toDouble();
-                double lat = obj["lat"].toDouble();
-                _suggestions_list->addItem(displayName);
-                // Store coordinates with the item (e.g., using QListWidgetItem::setData)
+                // Ensure lon and lat are parsed as strings and then converted to double
+                QString lonStr = obj["lon"].toString();
+                QString latStr = obj["lat"].toString();
+                double lon = lonStr.toDouble();
+                double lat = latStr.toDouble();
+
+                // Debugging: Check the values of lon and lat
+                qDebug() << "Longitude:" << lon << "Latitude:" << lat;
+
+                // Store coordinates with the item
+                QListWidgetItem *item = new QListWidgetItem(displayName, _suggestions_list.get());
+                item->setData(Qt::UserRole, QPointF(lon, lat));
             }
         } else {
             QMessageBox::warning(this, "Error", "Network error occurred.");
@@ -117,13 +132,23 @@ void MainWindow::onSearchReplyReceived() {
     }
 }
 
+void MainWindow::onSuggestionItemClicked(QListWidgetItem *item) {
+    QPointF coords = item->data(Qt::UserRole).toPointF();
+
+    QString text = QString("Longitude: %1, Latitude: %2").arg(coords.x()).arg(coords.y());
+    QMessageBox::about(this, tr("Coordinates"), text);
+
+    _mapWidget->setCenter(coords.x(), coords.y());
+    update();
+}
+
 void MainWindow::onQuitActionTriggered() {
     QApplication::quit();
 }
 
 void MainWindow::onAboutActionTriggered() {
     QString aboutText = "Application développée par:\nTimothée MEYER et Hugues ESTRADE\n\n"
-                        "Cette application est un projet BUT.\n"
+                        "Cette application est un projet de notre cher BUT.\n"
                         "Date: " + QDate::currentDate().toString("yyyy-MM-dd");
     QMessageBox::about(this, tr("À propos"), aboutText);
 }

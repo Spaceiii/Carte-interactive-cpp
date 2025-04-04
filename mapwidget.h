@@ -3,30 +3,32 @@
 
 #include <QWidget>
 #include <QPixmap>
+#include <QMap>
 #include <QNetworkAccessManager>
-#include <QNetworkReply>
 
-class MapWidget : public QWidget
-{
+class MapWidget : public QWidget {
     Q_OBJECT
 
 public:
-    MapWidget(QWidget *parent = nullptr);
-    void setZoomLevel(int zoomLevel);
-    void setCenterCoordinates(double longitude, double latitude);
+    explicit MapWidget(QWidget *parent = nullptr);
+
+    void setCenter(double lon, double lat);
+    void setZoom(int zoom);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
-    int zoomLevel;
-    double centerLongitude;
-    double centerLatitude;
-    QNetworkAccessManager *networkManager;
-    QPixmap loadTile(int x, int y, int zoom);
+    QPointF latLonToTilePos(double lon, double lat, int z);
+    QPointF screenPosToLatLon(const QPoint &pos);
+    void loadTile(int x, int y, int z);
+    void updateVisibleTiles();
 
-private slots:
-    void onTileDownloaded(QNetworkReply *reply);
+    QNetworkAccessManager *networkManager;
+    QMap<QString, QPixmap> tileCache;
+    double lon;
+    double lat;
+    int zoom;
 };
 
 #endif // MAPWIDGET_H
